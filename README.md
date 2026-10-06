@@ -172,6 +172,14 @@ The app applies these changes to `catalog.db` itself on startup, idempotently (S
 
 Prerequisite: the [.NET 10 SDK](https://dotnet.microsoft.com/download) (the projects target `net10.0`).
 
+`catalog.db` is not versioned (it is in `.gitignore`), because the app migrates and writes to it every time it runs. Create it at the repo root from the original challenge catalog, which the repo keeps as the test fixture:
+
+```bash
+cp CatalogConsolidation.Tests/Fixtures/catalog.original.db catalog.db
+```
+
+To start over, delete `catalog.db` and copy it again.
+
 ```bash
 dotnet restore
 dotnet run --project CatalogConsolidation

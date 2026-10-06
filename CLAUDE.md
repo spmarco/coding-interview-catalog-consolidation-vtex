@@ -56,5 +56,5 @@ Catalog Consolidation: a .NET minimal API that imports a sellers' products file 
 
 ## Commands
 
-- Run: `dotnet run --project CatalogConsolidation`. It migrates and writes to `catalog.db` (the user's working database): use a copy for experiments and probes.
+- Run: `dotnet run --project CatalogConsolidation`. It migrates and writes to `catalog.db`, the user's working database. `catalog.db` is git-ignored and untracked; seed it with `cp CatalogConsolidation.Tests/Fixtures/catalog.original.db catalog.db`. Use a copy for experiments and probes.
 - Test: `dotnet test`. If a running API locks `bin/`, test into an isolated folder: `dotnet test --artifacts-path <dir>`, then delete it.

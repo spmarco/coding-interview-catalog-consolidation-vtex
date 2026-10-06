@@ -2,3 +2,7 @@ bin/
 obj/
 *.user
 .vs/
+
+# The app migrates and writes to this database every time it runs. The original challenge
+# catalog is kept, read-only, as CatalogConsolidation.Tests/Fixtures/catalog.original.db.
+/catalog.db
