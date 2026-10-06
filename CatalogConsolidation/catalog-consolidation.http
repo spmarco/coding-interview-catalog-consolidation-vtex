@@ -1,0 +1,19 @@
+@hostAddress = https://localhost:7205
+# With plain `dotnet run` (profile "http") only HTTP is served:
+# @hostAddress = http://localhost:5053
+
+### Import catalog (multipart/form-data)
+# The multipart body needs an explicit boundary, and the file is attached with `< path`
+# (relative to this .http file). `file=@path` is curl syntax and is not understood here.
+POST {{hostAddress}}/api/catalog/imports
+Content-Type: multipart/form-data; boundary=----CatalogBoundary
+Accept: application/json
+
+------CatalogBoundary
+Content-Disposition: form-data; name="file"; filename="ProductEntry.json"
+Content-Type: application/json
+
+< ../ProductEntry.json
+------CatalogBoundary--
+
+###

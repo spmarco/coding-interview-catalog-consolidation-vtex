@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CatalogConsolidation.Tests/CatalogConsolidation.Tests.csproj" />
+  <Project Path="CatalogConsolidation/CatalogConsolidation.csproj" />
+</Solution>
