@@ -32,10 +32,10 @@ public sealed class SqliteCatalogUnitOfWork : ICatalogUnitOfWork
             Products = new SqliteProductRepository(_connection);
             SellerLinks = new SqliteSellerLinkRepository(_connection);
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteBusy)
+        catch (SqliteException ex) when (IsBusy(ex))
         {
             _connection.Dispose();
-            throw new CatalogBusyException("The catalog is locked by another import. Please retry.", ex);
+            throw Busy(ex);
         }
         catch
         {
@@ -52,7 +52,17 @@ public sealed class SqliteCatalogUnitOfWork : ICatalogUnitOfWork
 
     public void Commit()
     {
-        Execute("COMMIT;");
+        // The COMMIT needs the exclusive lock, so a reader on another connection can still block it.
+        // The transaction stays open on failure: Dispose rolls it back.
+        try
+        {
+            Execute("COMMIT;");
+        }
+        catch (SqliteException ex) when (IsBusy(ex))
+        {
+            throw Busy(ex);
+        }
+
         _completed = true;
     }
 
@@ -72,6 +82,11 @@ public sealed class SqliteCatalogUnitOfWork : ICatalogUnitOfWork
 
         _connection.Dispose();
     }
+
+    private static bool IsBusy(SqliteException ex) => ex.SqliteErrorCode == SqliteBusy;
+
+    private static CatalogBusyException Busy(SqliteException ex)
+        => new("The catalog is locked by another connection. Please retry.", ex);
 
     private void Execute(string sql)
     {

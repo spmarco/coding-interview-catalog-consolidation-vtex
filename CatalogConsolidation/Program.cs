@@ -17,6 +17,9 @@ app.EnsureCatalogSchema();
 
 app.UseExceptionHandler();
 
+// Errors the framework answers by itself, with no exception and no body (415, 404, 405...), also use ProblemDetails.
+app.UseStatusCodePages();
+
 app.MapCatalogImportEndpoints();
 
 app.Run();

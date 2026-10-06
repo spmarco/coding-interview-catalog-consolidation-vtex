@@ -122,5 +122,30 @@ public sealed class SqliteCatalogUnitOfWorkTests : IDisposable
         third.Commit();
     }
 
+    [Fact]
+    public void A_commit_blocked_by_another_connections_reader_reports_the_catalog_as_busy_and_stores_nothing()
+    {
+        var shortTimeout = _catalog.ConnectionStringWith("Default Timeout=1");
+
+        // An unfinished reader keeps a SHARED lock: BEGIN IMMEDIATE does not conflict with it,
+        // but the COMMIT needs the exclusive lock and cannot get it.
+        using var otherConnection = new SqliteConnection(_catalog.ConnectionString);
+        otherConnection.Open();
+        using var select = otherConnection.CreateCommand();
+        select.CommandText = "SELECT Id FROM Product";
+        using var unfinishedReader = select.ExecuteReader();
+        unfinishedReader.Read();
+
+        using (var unitOfWork = new SqliteCatalogUnitOfWork(shortTimeout))
+        {
+            unitOfWork.Products.Add(Product.Register("Blocked Commit", "Brand", null));
+
+            var ex = Assert.Throws<CatalogBusyException>(() => unitOfWork.Commit());
+            Assert.Equal(SqliteBusy, Assert.IsType<SqliteException>(ex.InnerException).SqliteErrorCode);
+        }
+
+        Assert.Equal(975, _catalog.Scalar<int>("SELECT COUNT(*) FROM Product")); // disposed without a commit: rolled back
+    }
+
     public void Dispose() => _catalog.Dispose();
 }

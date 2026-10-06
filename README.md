@@ -77,7 +77,7 @@ Both matching stages read from `ICatalogSnapshot`, a read-only, in-memory, trans
 | 6 | Malicious text (`TestBrand'; SELECT 1; --`) | Queries are always parameterized and the value is stored as plain text. | Prevents SQL injection. |
 | 7 | Repeated data: same seller and product on several rows, duplicates inside the file, reprocessing the same file | Unique constraint on `SellerProduct (SellerName, ProductId)`; both exact and approximate matching see products created earlier in the same run; everything runs in one transaction. | A repeated link is ignored and listed in the report with the discarded `SellerProductId`; the file cannot duplicate itself regardless of row order; and a second run creates nothing new. |
 | 8 | Which data wins when an entry matches an existing product | The catalog's. Only the link is created; `Name`, `Brand` and `Category` stay as they are in the catalog (a different category, such as `Photo`, only adds a warning to the report). | The catalog is data the company already has. `Product` is never altered, with no new columns and no backfill. |
-| 9 | Concurrent imports | The transaction is opened with `BEGIN IMMEDIATE`, which takes the SQLite write lock up front. | Imports are serialized, so two runs cannot create the same product at the same time. A tested example: four simultaneous uploads of the same new product create it exactly once. If the lock is not obtained within the timeout, the import fails with `503` and is safe to retry. |
+| 9 | Concurrent imports | The transaction is opened with `BEGIN IMMEDIATE`, which takes the SQLite write lock up front. | Imports are serialized, so two runs cannot create the same product at the same time. A tested example: four simultaneous uploads of the same new product create it exactly once. If a lock the import needs is not obtained within the timeout (the write lock to start, or the exclusive lock for the commit, which a reader on another connection can hold up), the import fails with `503`, stores nothing and is safe to retry. |
 | 10 | Seller identity: spelling of `SellerName` | `SellerName` is only trimmed and then compared exactly, so `GardenStore` and `gardenstore` are different sellers. | The challenge provides no seller registry to reconcile names against, and merging sellers on a guessed spelling would attach one seller's offers to another. Recorded as a limitation. |
 
 ## Approximate Matching
@@ -116,10 +116,10 @@ The highest score among different products of the same brand is `0.792` and the 
 
 - Request: `multipart/form-data` with the products file (`file`), in the same format as `ProductEntry.json`.
 - Response: the `ImportReport`.
-- Errors are RFC 7807 `ProblemDetails` written by `GlobalExceptionHandler`, one place that maps every exception to a status code:
+- Every error response is RFC 7807 `ProblemDetails` (`application/problem+json`): exceptions are mapped to a status code in one place, `GlobalExceptionHandler`, and the errors the framework answers by itself without an exception (415, and also 404 and 405 for unknown routes or methods) go through `UseStatusCodePages`:
   - `400 Bad Request`: the `file` part is missing, the multipart body is malformed, or the file is not a valid JSON array of product entries (an empty file included). This is distinct from a row being rejected inside a valid import, which is reported in `rejectedRows`.
-  - `415 Unsupported Media Type`: the request is not `multipart/form-data` (answered by the framework, with an empty body).
-  - `503 Service Unavailable`: another import holds the catalog's write lock past the timeout; retry.
+  - `415 Unsupported Media Type`: the request is not `multipart/form-data` (answered by the framework itself).
+  - `503 Service Unavailable`: another connection holds a lock the import needs past the timeout, either the write lock when it starts or a read lock that blocks its commit; nothing is stored, retry.
   - `500 Internal Server Error`: anything unexpected. The exception's message is logged, never sent to the client.
 
 ## Tech Stack and Project Structure
@@ -198,7 +198,7 @@ The end-to-end tests call the real HTTP endpoint against a throwaway copy of the
 - the documented analysis of the fixture (266 exact, 2 approximate, 1 new product, 257 links, 11 discarded duplicate links, 4 warnings, no rejected row);
 - what ends up in the database: the SQL-looking brand stored as plain text, `SellerProductId` stored as text, the seller's own spelling kept in `SellerProductName`;
 - idempotent reprocessing, and four simultaneous uploads creating a new product exactly once;
-- bad input: a malformed file (as `ProblemDetails`), a missing `file` part and a garbage multipart body return `400 Bad Request`, a non-multipart request returns `415`, and a catalog locked by another import returns `503`; a `null` row or a numeric `Id` inside a valid file is handled per row instead of failing the import (which kinds of file count as invalid, such as an empty file or JSON that is not an array, is covered by the parser's unit tests);
+- bad input: a malformed file (as `ProblemDetails`), a missing `file` part and a garbage multipart body return `400 Bad Request`, a non-multipart request returns `415` (also as `ProblemDetails`), and a catalog locked by another import returns `503`; a `null` row or a numeric `Id` inside a valid file is handled per row instead of failing the import (which kinds of file count as invalid, such as an empty file or JSON that is not an array, is covered by the parser's unit tests);
 - a duplicate `SellerProductId` from the same seller resolving to an existing link (reported as a discarded link, not duplicated).
 
 The layers are tested on their own as well:
@@ -206,7 +206,7 @@ The layers are tested on their own as well:
 - Domain: the entities and value objects (validation, the one-time identity, the key ignoring case/accents/spacing/category, similarity only inside a brand, category divergence, link reconciliation) and the two domain services (`ProductMatcher`, `SellerLinker`); every collaborator is an NSubstitute substitute of its domain interface (no hand-written fakes), and what was stored or tracked is checked with `Received()`, including that a new product is stored before the snapshot is told about it.
 - Application: `CatalogImporter` (every report field, a rejected row storing nothing), the `Stream.ReadProductEntriesAsync` extension that parses the upload (numbers and booleans read as text, `null` rows kept, anything that is not an array refused) and `CatalogImportService` (commit on success, no transaction for an invalid file, rollback on failure).
 - Api: `GlobalExceptionHandler` (every exception type to its status code, and an unexpected exception's message never reaching the client).
-- Infrastructure: the schema migration (shape, idempotency, legacy rows kept and converted to text, the unique index, a missing database failing clearly) and the unit of work (parameterized storage, a stored product reaching the snapshot only once tracked, round trip of a link, rollback without commit, and a second unit of work reporting the catalog as busy while the first holds the write lock).
+- Infrastructure: the schema migration (shape, idempotency, legacy rows kept and converted to text, the unique index, a missing database failing clearly) and the unit of work (parameterized storage, a stored product reaching the snapshot only once tracked, round trip of a link, rollback without commit, a second unit of work reporting the catalog as busy while the first holds the write lock, and a commit blocked by another connection's reader reporting it as busy and storing nothing).
 
 ## Known Limitations
 

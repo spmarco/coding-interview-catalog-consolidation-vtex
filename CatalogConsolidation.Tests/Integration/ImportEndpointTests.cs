@@ -30,13 +30,17 @@ public sealed class ImportEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Non_multipart_request_returns_415()
+    public async Task Non_multipart_request_returns_415_as_problem_details()
     {
         var (client, _) = NewClient();
 
         var response = await client.PostAsJsonAsync("/api/catalog/imports", new { });
 
+        // The framework answers this one itself, without an exception: it must still use the error contract.
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(415, problem.GetProperty("status").GetInt32());
     }
 
     [Fact]
