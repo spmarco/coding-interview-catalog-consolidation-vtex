@@ -1,5 +1,5 @@
-using CatalogConsolidation.Application;
 using CatalogConsolidation.Application.Exceptions;
+using CatalogConsolidation.Application.Imports;
 
 namespace CatalogConsolidation.Api.Endpoints;
 

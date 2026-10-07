@@ -1,9 +1,10 @@
+using CatalogConsolidation.Application.Entries;
 using CatalogConsolidation.Domain.Abstractions;
 using CatalogConsolidation.Domain.Exceptions;
 using CatalogConsolidation.Domain.Products;
 using CatalogConsolidation.Domain.Sellers;
 
-namespace CatalogConsolidation.Application;
+namespace CatalogConsolidation.Application.Imports;
 
 /// <summary>
 /// Runs README's "How it works" over a batch of entries, against the given catalog and seller
@@ -16,18 +17,18 @@ public sealed class CatalogImporter
     private readonly ICatalogSnapshot _catalog;
     private readonly IProductRepository _products;
     private readonly ProductMatcher _matcher;
-    private readonly SellerLinker _linker;
+    private readonly ISellerLinkRepository _sellerLinks;
 
-    public CatalogImporter(
-        ICatalogSnapshot catalog,
-        IProductRepository products,
-        ISellerLinkRepository sellerLinks,
-        MatchingOptions options)
+    public CatalogImporter(ICatalogSnapshot catalog,
+                           IProductRepository products,
+                           ISellerLinkRepository sellerLinks,
+                           double similarityThreshold,
+                           MatchStrategy strategy = MatchStrategy.NameAndBrandSimilarity)
     {
         _catalog = catalog;
         _products = products;
-        _matcher = new ProductMatcher(catalog, options.SimilarityThreshold);
-        _linker = new SellerLinker(sellerLinks);
+        _matcher = new ProductMatcher(catalog, similarityThreshold, strategy);
+        _sellerLinks = sellerLinks;
     }
 
     public ImportReport Import(IReadOnlyList<ProductEntryDto?> entries)
@@ -69,20 +70,25 @@ public sealed class CatalogImporter
 
         var product = ResolveProduct(candidate, entry, report);
 
-        var link = SellerProduct.Link(seller, product, sellerProductId, entry.Name);
-        var result = _linker.Link(link);
+        LinkSeller(product, SellerProduct.Link(seller, product, sellerProductId, entry.Name), report);
+    }
 
-        switch (result.Outcome)
+    private void LinkSeller(Product product, SellerProduct incoming, ImportReport report)
+    {
+        var existing = _sellerLinks.Find(incoming.Seller, incoming.ProductId);
+        if (existing is null)
         {
-            case LinkOutcome.Created:
-                report.LinksCreated++;
-                break;
-            case LinkOutcome.DuplicateDiscarded:
-                report.DuplicateLinksIgnored.Add(new DuplicateLinkIgnoredReport(
-                    seller.Value, product.Name, sellerProductId.Value, result.Existing!.SellerProductId.Value));
-                break;
-            case LinkOutcome.AlreadyLinked:
-                break;
+            _sellerLinks.Add(incoming);
+            report.LinksCreated++;
+            return;
+        }
+
+        if (existing.Reconcile(incoming) == LinkOutcome.DuplicateDiscarded)
+        {
+            report.DuplicateLinksIgnored.Add(new DuplicateLinkIgnoredReport(incoming.Seller.Value,
+                                                                            product.Name,
+                                                                            incoming.SellerProductId.Value,
+                                                                            existing.SellerProductId.Value));
         }
     }
 
@@ -100,13 +106,24 @@ public sealed class CatalogImporter
 
         var product = match.Product;
 
-        if (match.Kind == MatchKind.Exact)
+        switch (match.Kind)
         {
-            report.ExactMatches++;
-        }
-        else
-        {
-            report.ApproximateMatches.Add(new ApproximateMatchReport(entry.Id!, entry.Name!, product.Name, match.Score!.Value));
+            case MatchKind.Exact:
+                report.ExactMatches++;
+                break;
+
+            // The file asked to ignore the brand, so this row may have been merged into another
+            // brand's product: that is the whole risk of the strategy, and it is never silent.
+            case MatchKind.NameOnly:
+                report.NameOnlyMatches++;
+                report.Warnings.Add(new ImportWarningReport(
+                    entry.Id,
+                    $"Matched by name only: the catalog's '{product.Name}' has brand '{product.Brand ?? "(none)"}', the entry has '{entry.Brand ?? "(none)"}'."));
+                break;
+
+            default:
+                report.ApproximateMatches.Add(new ApproximateMatchReport(entry.Id!, entry.Name!, product.Name, match.Score!.Value));
+                break;
         }
 
         if (product.HasDivergentCategory(entry.Category))

@@ -47,7 +47,16 @@ The database has two tables:
 - `Product` (`Id`, `Name`, `Brand`, `Category`): the marketplace catalog.
 - `SellerProduct` (`Id`, `SellerName`, `ProductId`, `SellerProductId`): which sellers offer each product.
 
-Input: `ProductEntry.json`, with the fields `Id`, `SellerName`, `Name`, `Brand` and `Category`.
+Input: `ProductEntry.json`, with the fields `Id`, `SellerName`, `Name`, `Brand` and `Category`. A file may also wrap those entries in an object that chooses the matching rule:
+
+```json
+{
+  "matchStrategy": "name",
+  "products": [ { "Id": "...", "SellerName": "...", "Name": "...", "Brand": "...", "Category": "..." } ]
+}
+```
+
+`matchStrategy` is one of `name`, `nameAndBrand` or `nameAndBrandSimilarity` (case-insensitive). The bare array — the challenge's own format — stays valid and means `nameAndBrandSimilarity`, the rule described below.
 
 ### How it works
 
@@ -59,7 +68,9 @@ For each entry in the file, inside a single transaction:
 4. **Approximate match:** if there is none, compare the normalized `Name` against the products with the same `Brand` (when the entry has one) — including products created earlier in this run — using the Levenshtein similarity (see [Approximate Matching](#approximate-matching)). If the best score reaches the threshold, use that product.
 5. If no product was found, insert a new one into `Product`.
 6. In every case, create the link in `SellerProduct` if it does not exist yet. If the seller already has a link to this product under a *different* `SellerProductId`, the new `SellerProductId` is discarded and surfaced in the report instead of being silently dropped.
-7. Return an `ImportReport`: products created, links created, exact matches, approximate matches (the entered name, the catalog product it matched by name, and the score), duplicate links ignored (seller, the product's name, the discarded `SellerProductId` and the one already on file), warnings and rejected rows. The report never exposes the database's internal ids.
+7. Return an `ImportReport`: products created, links created, exact matches, name-only matches, approximate matches (the entered name, the catalog product it matched by name, and the score), duplicate links ignored (seller, the product's name, the discarded `SellerProductId` and the one already on file), warnings and rejected rows. The report never exposes the database's internal ids.
+
+Steps 3 and 4 are what `matchStrategy` selects. `nameAndBrand` stops after step 3. `name` replaces step 4 with a lookup by normalized name alone, across brands: the merge is counted in `nameOnlyMatches` and every such row gets a warning naming both brands, because ignoring the brand is exactly the false-merge risk decision #4 guards against. `nameAndBrandSimilarity`, the default when the file says nothing, runs both stages. A value the enum does not know does not fail the upload: the import runs with the default and reports it as a warning.
 
 A request that cannot be imported at all (a missing `file` part, or a file that is not a JSON array of product entries) is rejected with `400 Bad Request` before any row is processed and before the transaction opens — a different failure mode from a row being rejected inside a valid import (see [API](#api)). The endpoint itself does nothing but hand the uploaded file to `ICatalogImportService`; reading the file, opening the transaction and importing the rows all happen in the Application layer.
 
@@ -79,6 +90,7 @@ Both matching stages read from `ICatalogSnapshot`, a read-only, in-memory, trans
 | 8 | Which data wins when an entry matches an existing product | The catalog's. Only the link is created; `Name`, `Brand` and `Category` stay as they are in the catalog (a different category, such as `Photo`, only adds a warning to the report). | The catalog is data the company already has. `Product` is never altered, with no new columns and no backfill. |
 | 9 | Concurrent imports | The transaction is opened with `BEGIN IMMEDIATE`, which takes the SQLite write lock up front. | Imports are serialized, so two runs cannot create the same product at the same time. A tested example: four simultaneous uploads of the same new product create it exactly once. If a lock the import needs is not obtained within the timeout (the write lock to start, or the exclusive lock for the commit, which a reader on another connection can hold up), the import fails with `503`, stores nothing and is safe to retry. |
 | 10 | Seller identity: spelling of `SellerName` | `SellerName` is only trimmed and then compared exactly, so `GardenStore` and `gardenstore` are different sellers. | The challenge provides no seller registry to reconcile names against, and merging sellers on a guessed spelling would attach one seller's offers to another. Recorded as a limitation. |
+| 11 | Whether every caller wants the same duplicate criterion | The file chooses it in `matchStrategy`; a file without the field (including the challenge's bare array) runs `nameAndBrandSimilarity`. An unrecognized value falls back to that default and is reported as a warning instead of failing the upload. | How much the brand can be trusted is the caller's knowledge, not the catalog's: a seller that normalizes brands upstream may want the name alone, one that does not wants the brand enforced. And refusing a whole upload over a typo in a single field would be worse than importing it with the documented default and saying so in the report. |
 
 ## Approximate Matching
 
@@ -114,10 +126,10 @@ The highest score among different products of the same brand is `0.792` and the 
 
 `POST /api/catalog/imports`
 
-- Request: `multipart/form-data` with the products file (`file`), in the same format as `ProductEntry.json`.
+- Request: `multipart/form-data` with the products file (`file`), either in the same format as `ProductEntry.json` or wrapped in the `matchStrategy` envelope shown in [Solution Overview](#solution-overview).
 - Response: the `ImportReport`.
 - Every error response is RFC 7807 `ProblemDetails` (`application/problem+json`): exceptions are mapped to a status code in one place, `GlobalExceptionHandler`, and the errors the framework answers by itself without an exception (415, and also 404 and 405 for unknown routes or methods) go through `UseStatusCodePages`:
-  - `400 Bad Request`: the `file` part is missing, the multipart body is malformed, or the file is not a valid JSON array of product entries (an empty file included). This is distinct from a row being rejected inside a valid import, which is reported in `rejectedRows`.
+  - `400 Bad Request`: the `file` part is missing, the multipart body is malformed, or the file is neither a JSON array of product entries nor an object with a `products` array (an empty file included). This is distinct from a row being rejected inside a valid import, which is reported in `rejectedRows`.
   - `415 Unsupported Media Type`: the request is not `multipart/form-data` (answered by the framework itself).
   - `503 Service Unavailable`: another connection holds a lock the import needs past the timeout, either the write lock when it starts or a read lock that blocks its commit; nothing is stored, retry.
   - `500 Internal Server Error`: anything unexpected. The exception's message is logged, never sent to the client.
@@ -133,14 +145,20 @@ CatalogConsolidation/                 # the API
 │   ├── Abstractions/                 # ICatalogSnapshot, IProductRepository, ISellerLinkRepository, ICatalogUnitOfWork(Factory)
 │   ├── Exceptions/                   # DomainException and the invariant violations
 │   ├── Products/                     # Product, ProductKey, ProductMatcher, TextNormalizer, Levenshtein similarity
-│   └── Sellers/                      # SellerProduct, SellerName, SellerProductId, SellerLinker
-├── Application/                      # CatalogImportService (file -> transaction -> report), CatalogImporter, DTOs, ImportReport
-│   └── Exceptions/                   # InvalidImportFileException, CatalogBusyException
+│   └── Sellers/                      # SellerProduct, SellerName, SellerProductId
+├── Application/
+│   ├── Imports/                      # the use case: CatalogImportService (file -> transaction -> report),
+│   │                                 #   CatalogImporter, ImportReport
+│   ├── Entries/                      # reading the upload: ProductEntryDto, the matchStrategy envelope
+│   │                                 #   and the lenient JSON parsing
+│   ├── Exceptions/                   # InvalidImportFileException, CatalogBusyException
+│   └── DependencyInjection/          # AddCatalogApplication
 ├── Infrastructure/                   # SQLite: unit of work, in-memory ICatalogSnapshot, product and link repositories, schema setup, DI
 └── Api/
     ├── Endpoints/                    # the import endpoint (hands the file to the Application layer)
     └── ErrorHandling/                # GlobalExceptionHandler (exceptions -> ProblemDetails)
 CatalogConsolidation.Tests/           # xUnit: unit tests plus end-to-end tests against catalog.db and ProductEntry.json
+load-tests/                           # the challenge's ProductEntry.json, plus generated load files and their scripts
 ```
 
 The domain model carries the rules instead of just holding data:
@@ -148,7 +166,7 @@ The domain model carries the rules instead of just holding data:
 - `Product` is created already valid, knows its own `ProductKey`, scores how similar another description is, flags a divergent category, and never changes afterwards (only its database identity is assigned, once).
 - `ProductKey` (normalized name + brand, never the category) is the value object that defines "the same product".
 - `SellerName` and `SellerProductId` validate themselves; `SellerProductId` also knows whether it looks like a GUID.
-- `SellerProduct` is the seller's link to a product and reconciles an incoming offer against itself (`AlreadyLinked` or `DuplicateDiscarded`); `SellerLinker` and `ProductMatcher` are the domain services that apply those rules through the abstractions.
+- `SellerProduct` is the seller's link to a product and reconciles an incoming offer against itself (`AlreadyLinked` or `DuplicateDiscarded`); `ProductMatcher` is the domain service that applies the matching rules through the snapshot abstraction, and the `CatalogImporter` orchestrates the link (find, store or reconcile).
 - Infrastructure only stores and indexes: it holds no business rule.
 
 ## Catalog Analysis
@@ -184,9 +202,9 @@ To start over, delete `catalog.db` and copy it again.
 dotnet restore
 dotnet run --project CatalogConsolidation
 
-# In another terminal (adjust the port to the one printed by dotnet run; catalog.db and
-# ProductEntry.json live at the repo root)
-curl -X POST http://localhost:5053/api/catalog/imports -F "file=@ProductEntry.json"
+# In another terminal (adjust the port to the one printed by dotnet run; catalog.db lives at
+# the repo root and the products file in load-tests/)
+curl -X POST http://localhost:5053/api/catalog/imports -F "file=@load-tests/ProductEntry.json"
 ```
 
 Run the tests with:
@@ -207,12 +225,13 @@ The end-to-end tests call the real HTTP endpoint against a throwaway copy of the
 - what ends up in the database: the SQL-looking brand stored as plain text, `SellerProductId` stored as text, the seller's own spelling kept in `SellerProductName`;
 - idempotent reprocessing, and four simultaneous uploads creating a new product exactly once;
 - bad input: a malformed file (as `ProblemDetails`), a missing `file` part and a garbage multipart body return `400 Bad Request`, a non-multipart request returns `415` (also as `ProblemDetails`), and a catalog locked by another import returns `503`; a `null` row or a numeric `Id` inside a valid file is handled per row instead of failing the import (which kinds of file count as invalid, such as an empty file or JSON that is not an array, is covered by the parser's unit tests);
-- a duplicate `SellerProductId` from the same seller resolving to an existing link (reported as a discarded link, not duplicated).
+- a duplicate `SellerProductId` from the same seller resolving to an existing link (reported as a discarded link, not duplicated);
+- the file choosing its own rule: `name` linking a row to another brand's product (with the warning and `nameOnlyMatches`), `nameAndBrand` creating the product the default rule would have merged, and an unrecognized strategy importing with the default plus a warning naming the value.
 
 The layers are tested on their own as well:
 
-- Domain: the entities and value objects (validation, the one-time identity, the key ignoring case/accents/spacing/category, similarity only inside a brand, category divergence, link reconciliation) and the two domain services (`ProductMatcher`, `SellerLinker`); every collaborator is an NSubstitute substitute of its domain interface (no hand-written fakes), and what was stored or tracked is checked with `Received()`, including that a new product is stored before the snapshot is told about it.
-- Application: `CatalogImporter` (every report field, a rejected row storing nothing), the `Stream.ReadProductEntriesAsync` extension that parses the upload (numbers and booleans read as text, `null` rows kept, anything that is not an array refused) and `CatalogImportService` (commit on success, no transaction for an invalid file, rollback on failure).
+- Domain: the value objects' validation, the product's one-time identity, the key ignoring case/accents/spacing/category, similarity only inside a brand, category divergence, the text normalizer and the Levenshtein algorithm, plus the `ProductMatcher` domain service over a substituted `ICatalogSnapshot`, including each `MatchStrategy` (name+brand stopping before the similarity stage, name alone crossing brands, and the lowest `Id` winning an ambiguous name). A rule an entity only ever answers for the importer, such as the link reconciliation, is covered through the import flow instead of in a test of its own.
+- Application: `CatalogImporter`, with the real entities and every collaborator substituted at its domain interface (NSubstitute, no hand-written fakes): every report field, a rejected row storing nothing, a new product stored before the snapshot is told about it (checked with `Received()`), and the link rule — reprocessing the identical row creates nothing, a different `SellerProductId` is reported as discarded, another seller offering the same product gets its own link. Also the `Stream.ReadImportFileAsync` extension that parses the upload — both shapes of the file, the strategy in any casing, an unrecognized strategy kept as raw text, unknown envelope properties ignored, numbers and booleans read as text, `null` rows kept, anything else refused — and `CatalogImportService` (commit on success, no transaction for an invalid file, rollback on failure).
 - Api: `GlobalExceptionHandler` (every exception type to its status code, and an unexpected exception's message never reaching the client).
 - Infrastructure: the schema migration (shape, idempotency, legacy rows kept and converted to text, the unique index, a missing database failing clearly) and the unit of work (parameterized storage, a stored product reaching the snapshot only once tracked, round trip of a link, rollback without commit, a second unit of work reporting the catalog as busy while the first holds the write lock, and a commit blocked by another connection's reader reporting it as busy and storing nothing).
 
@@ -222,4 +241,7 @@ The layers are tested on their own as well:
 - Approximate matching never applies to entries without a `Brand`: there is no comparison group to fall back to, so a typo variant of an unbranded product always creates a new product. This is a deliberate trade-off — removing the brand filter would reintroduce the false-merge risk the filter exists to prevent.
 - Word-reordering in `Name` (for example `"Memory Foam Queen Mattress"` vs `"Mattress Memory Foam Queen"`) is not detected by either matching stage; this is treated as the same class of limitation as cross-language differences.
 - `SellerName` is compared exactly (only trimmed), so differently spelled or cased names of the same seller are treated as different sellers (decision #10).
+- The `name` strategy merges across brands on purpose, which is the opposite of the guard decision #4 relies on: a file that asks for it accepts that `Wireless Mouse` from one brand may be linked to another brand's product. Every such row is counted in `nameOnlyMatches` and warned about, but nothing blocks it.
+- When several catalog products share a normalized name under different brands, the `name` strategy links to the **lowest `Id`**. That is a stable choice, not a meaningful one: the data carries nothing that says which brand the seller meant.
+- A file in the envelope shape is buffered whole before being deserialized (a custom converter at the JSON root cannot suspend mid-value), while the bare array is still streamed. On a 30 MB upload that is one extra buffer of the same size at peak; the deserialized entries already dominate memory, so this was accepted rather than hand-rolling the root dispatch.
 - Designed to demonstrate understanding of the problem, not for production volumes: each approximate lookup compares against all products of the same brand, and `ICatalogSnapshot` loads the relevant catalog fully into memory per import.

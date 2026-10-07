@@ -35,6 +35,12 @@ public class ProductMatcherTests
     private void GivenBrandProducts(params Product[] brandProducts)
         => _catalog.FindByBrand(Arg.Any<ProductKey>()).Returns(brandProducts);
 
+    /// <summary>Makes the name lookup return <paramref name="namedProducts"/> whatever name is asked for.</summary>
+    private void GivenProductsNamed(params Product[] namedProducts)
+        => _catalog.FindByName(Arg.Any<ProductKey>()).Returns(namedProducts);
+
+    private ProductMatcher MatcherFor(MatchStrategy strategy) => new(_catalog, Threshold, strategy);
+
     [Fact]
     public void Score_just_below_threshold_is_rejected()
     {
@@ -108,5 +114,51 @@ public class ProductMatcherTests
         var result = _matcher.Match(ProductKey.From("Router WiFi 6 TP-Link", "OXO"));
 
         Assert.Equal(2, result!.Product.Id);
+    }
+
+    [Fact]
+    public void The_name_and_brand_strategy_stops_before_the_similarity_stage()
+    {
+        GivenBrandProducts(Product.Restore(1, Variant(0), "BrandX", null));
+
+        // A pair the default strategy would accept (similarity 0.82): this one must not.
+        var result = MatcherFor(MatchStrategy.NameAndBrand).Match(ProductKey.From(Variant(18), "BrandX"));
+
+        Assert.Null(result);
+        _catalog.DidNotReceive().FindByBrand(Arg.Any<ProductKey>());
+        _catalog.DidNotReceive().FindByName(Arg.Any<ProductKey>());
+    }
+
+    [Fact]
+    public void The_name_strategy_matches_a_product_of_another_brand()
+    {
+        GivenProductsNamed(Product.Restore(1, "Wireless Mouse", "Logitech", null));
+
+        var result = MatcherFor(MatchStrategy.Name).Match(ProductKey.From("Wireless  Mouse", "Microsoft"));
+
+        Assert.Equal(MatchKind.NameOnly, result!.Kind);
+        Assert.Equal(1, result.Product.Id);
+        Assert.Null(result.Score);
+    }
+
+    [Fact]
+    public void The_name_strategy_takes_the_lowest_id_when_several_brands_share_the_name()
+    {
+        GivenProductsNamed(
+            Product.Restore(7, "Wireless Mouse", "Logitech", null),
+            Product.Restore(3, "Wireless Mouse", "Razer", null),
+            Product.Restore(5, "Wireless Mouse", "Dell", null));
+
+        var result = MatcherFor(MatchStrategy.Name).Match(ProductKey.From("Wireless Mouse", "Microsoft"));
+
+        Assert.Equal(3, result!.Product.Id);
+    }
+
+    [Fact]
+    public void The_name_strategy_matches_nothing_when_no_product_shares_the_name()
+    {
+        GivenProductsNamed();
+
+        Assert.Null(MatcherFor(MatchStrategy.Name).Match(ProductKey.From("Wireless Mouse", "Microsoft")));
     }
 }

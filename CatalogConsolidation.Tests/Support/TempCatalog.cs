@@ -14,7 +14,8 @@ internal sealed class TempCatalog : IDisposable
 
     public static readonly string RepoRoot = FindRepoRoot();
 
-    public static readonly string ProductEntryPath = System.IO.Path.Combine(RepoRoot, "ProductEntry.json");
+    public static readonly string ProductEntryPath =
+        System.IO.Path.Combine(RepoRoot, "load-tests", "ProductEntry.json");
 
     public TempCatalog()
     {
@@ -48,14 +49,19 @@ internal sealed class TempCatalog : IDisposable
 
     public void Dispose() => File.Delete(Path);
 
+    /// <summary>
+    /// The solution file marks the root: it is tracked and never moves, unlike the load files.
+    /// </summary>
     private static string FindRepoRoot()
     {
+        const string SolutionFile = "CatalogConsolidation.slnx";
+
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "ProductEntry.json")))
+        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, SolutionFile)))
         {
             dir = dir.Parent;
         }
 
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate ProductEntry.json above the test base directory.");
+        return dir?.FullName ?? throw new InvalidOperationException($"Could not locate {SolutionFile} above the test base directory.");
     }
 }

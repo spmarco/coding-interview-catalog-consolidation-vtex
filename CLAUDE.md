@@ -24,7 +24,7 @@ Catalog Consolidation: a .NET minimal API that imports a sellers' products file 
 **Domain modeling**
 - A value object is built only through a validating factory that throws on invalid input: no public constructor or setter that bypasses validation.
 - Entities cannot exist in an invalid state: factories take already-validated value objects.
-- Decisions belong in a policy/domain service (`ProductMatcher`, `SellerLinker`), not in the value object they are about.
+- Decisions belong in a policy/domain service (`ProductMatcher`), not in the value object they are about.
 - Do not add a DTO, struct or mapper only to carry locals between two private methods.
 
 **Time and culture**
@@ -40,6 +40,7 @@ Catalog Consolidation: a .NET minimal API that imports a sellers' products file 
 - Integration tests never touch tracked seed data: they copy `CatalogConsolidation.Tests/Fixtures/catalog.original.db` to a temp file (`TempCatalog`). They never read or write the `catalog.db` the app runs against.
 - Anything that reserves or writes under concurrency needs a test firing N parallel operations and asserting no duplicates (see `Concurrent_imports_of_the_same_new_product_create_it_exactly_once`).
 - Integration tests are self-contained: the test run itself starts everything it needs.
+- Tests verify business behavior, not entities in isolation: cover a rule through the real flow (the importer with real entities, collaborators substituted at the abstraction boundary). No test class for a single entity or value object only to raise coverage or repeat what a flow test proves. A direct test is for logic with real branching (a policy, the normalizer, the similarity algorithm, a value object's validation); a guard no normal flow can reach is not a reason for a test of its own.
 
 **Git hygiene and secrets**
 - Files that accumulate local state from running the app belong in `.gitignore`, and are untracked once with `git rm --cached`.

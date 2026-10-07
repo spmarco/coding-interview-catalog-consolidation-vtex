@@ -54,7 +54,9 @@ public sealed class ImportEndpointTests : IDisposable
         var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(400, problem.GetProperty("status").GetInt32());
         Assert.Equal("Invalid import file.", problem.GetProperty("title").GetString());
-        Assert.Equal("The file is not a valid JSON array of product entries.", problem.GetProperty("detail").GetString());
+        Assert.Equal(
+            "The file is not a valid products file: expected a JSON array of product entries, or an object with a 'products' array.",
+            problem.GetProperty("detail").GetString());
     }
 
     [Fact]
@@ -221,6 +223,69 @@ public sealed class ImportEndpointTests : IDisposable
         Assert.Equal(1, reports.Sum(r => r.GetProperty("productsCreated").GetInt32()));
         Assert.Equal(1, catalog.Scalar<int>("SELECT COUNT(*) FROM Product WHERE Name = 'Concurrency Probe Widget'"));
         Assert.Equal(1, catalog.Scalar<int>("SELECT COUNT(*) FROM SellerProduct WHERE SellerName = 'RaceSeller'"));
+    }
+
+    [Fact]
+    public async Task A_file_asking_to_match_by_name_links_across_brands_and_warns()
+    {
+        var (client, catalog) = NewClient();
+
+        // The catalog has "Router WiFi 6 TP-Link" under TP-Link; this row sends another brand, so
+        // only the name-only rule can match it (the default rule would create a product).
+        var body = """
+            {"matchStrategy":"name","products":[
+              {"Id":"aaaaaaaa-1111-4111-8111-111111111111","SellerName":"NameSeller",
+               "Name":"Router  WiFi 6 TP-Link","Brand":"Netgear","Category":"Networking"}]}
+            """;
+
+        var report = await PostImport(client, Encoding.UTF8.GetBytes(body));
+
+        Assert.Equal(1, report.GetProperty("nameOnlyMatches").GetInt32());
+        Assert.Equal(0, report.GetProperty("productsCreated").GetInt32());
+        Assert.Equal(1, report.GetProperty("linksCreated").GetInt32());
+        Assert.Equal(975, catalog.Scalar<int>("SELECT COUNT(*) FROM Product"));
+
+        var warning = Assert.Single(report.GetProperty("warnings").EnumerateArray());
+        Assert.Contains("name only", warning.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task A_file_asking_for_name_and_brand_creates_what_the_default_rule_would_have_merged()
+    {
+        var (client, _) = NewClient();
+
+        // "Roteador" against the catalog's "Router" scores 0.826 and merges under the default rule.
+        var body = """
+            {"matchStrategy":"nameAndBrand","products":[
+              {"Id":"bbbbbbbb-2222-4222-8222-222222222222","SellerName":"StrictSeller",
+               "Name":"Roteador WiFi 6 TP-Link","Brand":"TP-Link","Category":"Networking"}]}
+            """;
+
+        var report = await PostImport(client, Encoding.UTF8.GetBytes(body));
+
+        Assert.Equal(1, report.GetProperty("productsCreated").GetInt32());
+        Assert.Equal(0, report.GetProperty("approximateMatches").GetArrayLength());
+        Assert.Equal(0, report.GetProperty("nameOnlyMatches").GetInt32());
+    }
+
+    [Fact]
+    public async Task A_file_naming_a_strategy_that_does_not_exist_is_imported_with_the_default_rule()
+    {
+        var (client, _) = NewClient();
+        var body = """
+            {"matchStrategy":"bogus","products":[
+              {"Id":"cccccccc-3333-4333-8333-333333333333","SellerName":"TypoSeller",
+               "Name":"Roteador WiFi 6 TP-Link","Brand":"TP-Link","Category":"Networking"}]}
+            """;
+
+        var report = await PostImport(client, Encoding.UTF8.GetBytes(body));
+
+        // The default rule ran: the row matched approximately instead of being rejected.
+        Assert.Equal(1, report.GetProperty("approximateMatches").GetArrayLength());
+        Assert.Equal(0, report.GetProperty("productsCreated").GetInt32());
+        Assert.Contains(
+            report.GetProperty("warnings").EnumerateArray(),
+            w => w.GetProperty("message").GetString()!.Contains("bogus"));
     }
 
     private static async Task<HttpResponseMessage> PostRaw(HttpClient client, string body)

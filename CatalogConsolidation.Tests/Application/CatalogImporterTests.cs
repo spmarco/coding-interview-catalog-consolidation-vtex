@@ -1,4 +1,5 @@
-using CatalogConsolidation.Application;
+using CatalogConsolidation.Application.Entries;
+using CatalogConsolidation.Application.Imports;
 using CatalogConsolidation.Domain.Abstractions;
 using CatalogConsolidation.Domain.Products;
 using CatalogConsolidation.Domain.Sellers;
@@ -9,6 +10,8 @@ namespace CatalogConsolidation.Tests.Application;
 
 public class CatalogImporterTests
 {
+    private const double Threshold = 0.81;
+
     private readonly ICatalogSnapshot _catalog = StatefulMocks.Catalog();
     private readonly IProductRepository _products = StatefulMocks.Products();
     private readonly ISellerLinkRepository _links = StatefulMocks.SellerLinks();
@@ -20,8 +23,9 @@ public class CatalogImporterTests
     }
 
     /// <summary>For the tests whose scenario starts with products already in the catalog.</summary>
-    private CatalogImporter ImporterFor(ICatalogSnapshot catalog)
-        => new(catalog, _products, _links, new MatchingOptions());
+    private CatalogImporter ImporterFor(ICatalogSnapshot catalog,
+                                        MatchStrategy strategy = MatchStrategy.NameAndBrandSimilarity)
+        => new(catalog, _products, _links, Threshold, strategy);
 
     private static ProductEntryDto Entry(string? id, string? seller, string? name, string? brand = "Brand", string? category = "Cat")
         => new(id, seller, name, brand, category);
@@ -141,6 +145,18 @@ public class CatalogImporterTests
     }
 
     [Fact]
+    public void Another_seller_offering_the_same_product_gets_its_own_link()
+    {
+        var importer = ImporterFor(StatefulMocks.Catalog(Product.Restore(1, "Garden Hose 50 Feet", "Flexzilla", null)));
+
+        var report = importer.Import([Entry("id-1", "SuperMart", "Garden Hose 50 Feet", "Flexzilla", null),
+                                      Entry("id-1", "TechWorld", "Garden Hose 50 Feet", "Flexzilla", null)]);
+
+        Assert.Equal(2, report.LinksCreated);
+        Assert.Empty(report.DuplicateLinksIgnored);
+    }
+
+    [Fact]
     public void The_sellers_own_name_for_the_product_is_kept_exactly_as_sent()
     {
         var importer = ImporterFor(StatefulMocks.Catalog(Product.Restore(1, "Smartphone Galaxy S23", "Samsung", "Electronics")));
@@ -166,5 +182,53 @@ public class CatalogImporterTests
         var approximate = Assert.Single(report.ApproximateMatches);
         Assert.Equal("Roteador WiFi 6 TP-Link", approximate.MatchedProductName);
         Assert.Equal(2, report.LinksCreated);
+    }
+
+    [Fact]
+    public void The_name_strategy_links_to_another_brands_product_and_warns_about_it()
+    {
+        var catalog = StatefulMocks.Catalog(Product.Restore(1, "Wireless Mouse", "Logitech", "Computers"));
+
+        var report = ImporterFor(catalog, MatchStrategy.Name)
+            .Import([Entry(NewId(), "SuperMart", "Wireless Mouse", "Microsoft", "Computers")]);
+
+        Assert.Equal(1, report.NameOnlyMatches);
+        Assert.Equal(0, report.ProductsCreated);
+        Assert.Equal(0, report.ExactMatches);
+        Assert.Empty(report.ApproximateMatches);
+        _products.DidNotReceive().Add(Arg.Any<Product>());
+        _links.Received(1).Add(Arg.Is<SellerProduct>(l => l.ProductId == 1));
+
+        var warning = Assert.Single(report.Warnings);
+        Assert.Contains("Matched by name only", warning.Message);
+        Assert.Contains("Logitech", warning.Message);
+        Assert.Contains("Microsoft", warning.Message);
+    }
+
+    [Fact]
+    public void The_name_and_brand_strategy_creates_the_product_the_default_would_have_merged()
+    {
+        var catalog = StatefulMocks.Catalog(Product.Restore(1, "Roteador WiFi 6 TP-Link", "TP-Link", "Networking"));
+
+        var report = ImporterFor(catalog, MatchStrategy.NameAndBrand)
+            .Import([Entry(NewId(), "SuperMart", "Router WiFi 6 TP-Link", "TP-Link", "Networking")]);
+
+        // The default strategy matches this pair approximately (0.826); this one must not.
+        Assert.Equal(1, report.ProductsCreated);
+        Assert.Empty(report.ApproximateMatches);
+        Assert.Equal(0, report.NameOnlyMatches);
+    }
+
+    [Fact]
+    public void An_exact_match_still_wins_before_the_strategy_is_consulted()
+    {
+        var catalog = StatefulMocks.Catalog(Product.Restore(1, "Wireless Mouse", "Logitech", "Computers"));
+
+        var report = ImporterFor(catalog, MatchStrategy.Name)
+            .Import([Entry(NewId(), "SuperMart", "Wireless Mouse", "Logitech", "Computers")]);
+
+        Assert.Equal(1, report.ExactMatches);
+        Assert.Equal(0, report.NameOnlyMatches);
+        Assert.Empty(report.Warnings);
     }
 }

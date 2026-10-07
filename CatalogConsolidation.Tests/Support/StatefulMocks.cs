@@ -28,6 +28,12 @@ internal static class StatefulMocks
                     ? products.Where(p => p.Key.NormalizedBrand == key.NormalizedBrand).ToList()
                     : new List<Product>();
             });
+        catalog.FindByName(Arg.Any<ProductKey>())
+            .Returns(call =>
+            {
+                var key = call.Arg<ProductKey>();
+                return products.Where(p => p.Key.NormalizedName == key.NormalizedName).ToList();
+            });
         catalog.When(c => c.Track(Arg.Any<Product>()))
             .Do(call => products.Add(call.Arg<Product>()));
 

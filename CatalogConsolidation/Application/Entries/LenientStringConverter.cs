@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace CatalogConsolidation.Application;
+namespace CatalogConsolidation.Application.Entries;
 
 /// <summary>
 /// Reads any JSON scalar as text, so a row whose field is a number or boolean (for example a

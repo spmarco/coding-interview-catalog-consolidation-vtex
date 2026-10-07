@@ -5,11 +5,18 @@ using CatalogConsolidation.Infrastructure.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddCatalogApplication(builder.Configuration);
+builder.Services.AddCatalogApplication();
 builder.Services.AddCatalogInfrastructure(builder.Configuration, builder.Environment.ContentRootPath);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+
+// Force scope validation on regardless of the environment
+builder.Host.UseDefaultServiceProvider(options =>
+{
+    options.ValidateScopes = true;
+    options.ValidateOnBuild = true; // Also validates that all services can be constructed
+});
 
 var app = builder.Build();
 

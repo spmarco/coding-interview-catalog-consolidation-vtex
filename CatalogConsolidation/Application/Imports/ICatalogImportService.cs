@@ -1,4 +1,4 @@
-namespace CatalogConsolidation.Application;
+namespace CatalogConsolidation.Application.Imports;
 
 public interface ICatalogImportService
 {

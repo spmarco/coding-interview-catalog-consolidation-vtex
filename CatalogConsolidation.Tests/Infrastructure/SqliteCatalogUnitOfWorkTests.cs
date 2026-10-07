@@ -71,6 +71,23 @@ public sealed class SqliteCatalogUnitOfWorkTests : IDisposable
     }
 
     [Fact]
+    public void The_loaded_catalog_is_also_matched_by_name_alone_across_brands()
+    {
+        using var unitOfWork = new SqliteCatalogUnitOfWork(_catalog.ConnectionString);
+        var router = unitOfWork.Catalog.FindByKey(ProductKey.From("Router WiFi 6 TP-Link", "TP-Link"))!;
+
+        // The brand in the key is ignored by this lookup: that is what MatchStrategy.Name needs.
+        Assert.Contains(router, unitOfWork.Catalog.FindByName(ProductKey.From("router  wifi 6 tp-link", "Netgear")));
+        Assert.Empty(unitOfWork.Catalog.FindByName(ProductKey.From("no product has this name", null)));
+
+        var stored = Product.Register("Brand New Thing", "Whatever", null);
+        unitOfWork.Products.Add(stored);
+        unitOfWork.Catalog.Track(stored);
+
+        Assert.Contains(stored, unitOfWork.Catalog.FindByName(ProductKey.From("brand new thing", "Another")));
+    }
+
+    [Fact]
     public void A_stored_link_can_be_found_again_with_everything_it_was_saved_with()
     {
         using (var unitOfWork = new SqliteCatalogUnitOfWork(_catalog.ConnectionString))

@@ -6,3 +6,7 @@ obj/
 # The app migrates and writes to this database every time it runs. The original challenge
 # catalog is kept, read-only, as CatalogConsolidation.Tests/Fixtures/catalog.original.db.
 /catalog.db
+
+# Load files and the scripts that generate them. ProductEntry.json lives here too and stays
+# tracked (git keeps honouring files it already tracks), so the tests still find it.
+/load-tests/

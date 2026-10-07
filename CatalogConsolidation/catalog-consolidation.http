@@ -13,7 +13,32 @@ Accept: application/json
 Content-Disposition: form-data; name="file"; filename="ProductEntry.json"
 Content-Type: application/json
 
-< ../ProductEntry.json
+< ../load-tests/ProductEntry.json
+------CatalogBoundary--
+
+### Import choosing the matching rule (README decision #11)
+# "name" ignores the brand: this row links to the catalog's "Router WiFi 6 TP-Link" (TP-Link)
+# and the report says so in nameOnlyMatches plus a warning.
+POST {{hostAddress}}/api/catalog/imports
+Content-Type: multipart/form-data; boundary=----CatalogBoundary
+Accept: application/json
+
+------CatalogBoundary
+Content-Disposition: form-data; name="file"; filename="import.json"
+Content-Type: application/json
+
+{
+  "matchStrategy": "name",
+  "products": [
+    {
+      "Id": "aaaaaaaa-1111-4111-8111-111111111111",
+      "SellerName": "NameSeller",
+      "Name": "Router WiFi 6 TP-Link",
+      "Brand": "Netgear",
+      "Category": "Networking"
+    }
+  ]
+}
 ------CatalogBoundary--
 
 ###

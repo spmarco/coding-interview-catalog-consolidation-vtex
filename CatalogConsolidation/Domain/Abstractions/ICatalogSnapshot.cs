@@ -16,6 +16,9 @@ public interface ICatalogSnapshot
     /// <summary>The products of the key's brand (the approximate-matching comparison group); empty when the key has no brand.</summary>
     IReadOnlyList<Product> FindByBrand(ProductKey key);
 
+    /// <summary>The products whose normalized name equals the key's, whatever their brand; empty when none does.</summary>
+    IReadOnlyList<Product> FindByName(ProductKey key);
+
     /// <summary>Makes a product that was just stored (so it already has its identity) visible to later lookups.</summary>
     void Track(Product product);
 }

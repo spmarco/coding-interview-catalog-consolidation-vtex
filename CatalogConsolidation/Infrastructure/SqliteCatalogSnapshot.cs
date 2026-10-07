@@ -6,13 +6,14 @@ namespace CatalogConsolidation.Infrastructure;
 
 /// <summary>
 /// The in-memory implementation of <see cref="ICatalogSnapshot"/>: loads the full catalog once
-/// from the given connection and indexes it by key and by brand. It never writes to the database.
-/// What makes two products "the same" lives in the domain.
+/// from the given connection and indexes it by key, by brand and by name. It never writes to the
+/// database. What makes two products "the same" lives in the domain.
 /// </summary>
 public sealed class SqliteCatalogSnapshot : ICatalogSnapshot
 {
     private readonly Dictionary<ProductKey, Product> _byKey = [];
     private readonly Dictionary<string, List<Product>> _byBrand = [];
+    private readonly Dictionary<string, List<Product>> _byName = [];
 
     public SqliteCatalogSnapshot(SqliteConnection connection)
     {
@@ -23,6 +24,9 @@ public sealed class SqliteCatalogSnapshot : ICatalogSnapshot
 
     public IReadOnlyList<Product> FindByBrand(ProductKey key)
         => key.HasBrand && _byBrand.TryGetValue(key.NormalizedBrand, out var products) ? products : [];
+
+    public IReadOnlyList<Product> FindByName(ProductKey key)
+        => _byName.TryGetValue(key.NormalizedName, out var products) ? products : [];
 
     public void Track(Product product)
     {
@@ -52,13 +56,18 @@ public sealed class SqliteCatalogSnapshot : ICatalogSnapshot
     private void Index(Product product)
     {
         _byKey[product.Key] = product;
+        Bucket(_byBrand, product.Key.NormalizedBrand).Add(product);
+        Bucket(_byName, product.Key.NormalizedName).Add(product);
+    }
 
-        if (!_byBrand.TryGetValue(product.Key.NormalizedBrand, out var bucket))
+    private static List<Product> Bucket(Dictionary<string, List<Product>> index, string value)
+    {
+        if (!index.TryGetValue(value, out var bucket))
         {
             bucket = [];
-            _byBrand[product.Key.NormalizedBrand] = bucket;
+            index[value] = bucket;
         }
 
-        bucket.Add(product);
+        return bucket;
     }
 }

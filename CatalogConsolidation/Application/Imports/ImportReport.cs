@@ -1,4 +1,4 @@
-namespace CatalogConsolidation.Application;
+namespace CatalogConsolidation.Application.Imports;
 
 public sealed record ApproximateMatchReport(string RowId, string EnteredName, string MatchedProductName, double Score);
 
@@ -15,6 +15,9 @@ public sealed class ImportReport
     public int LinksCreated { get; set; }
 
     public int ExactMatches { get; set; }
+
+    /// <summary>Rows matched by name alone, so the catalog's brand may differ (MatchStrategy.Name).</summary>
+    public int NameOnlyMatches { get; set; }
 
     public List<ApproximateMatchReport> ApproximateMatches { get; } = [];
 

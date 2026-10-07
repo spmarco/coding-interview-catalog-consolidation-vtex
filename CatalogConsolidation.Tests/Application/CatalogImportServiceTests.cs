@@ -1,10 +1,10 @@
 using System.Text;
-using CatalogConsolidation.Application;
 using CatalogConsolidation.Application.Exceptions;
+using CatalogConsolidation.Application.Imports;
 using CatalogConsolidation.Domain.Abstractions;
 using CatalogConsolidation.Domain.Products;
 using CatalogConsolidation.Tests.Support;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -14,6 +14,10 @@ public class CatalogImportServiceTests
 {
     private const string OneNewProduct =
         """[{"Id":"11111111-1111-4111-1111-111111111111","SellerName":"S","Name":"Brand New Gadget","Brand":"Acme","Category":"Gadgets"}]""";
+
+    private readonly IConfiguration _configuration = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["Matching:SimilarityThreshold"] = "0.81" })
+        .Build();
 
     private readonly IProductRepository _products = StatefulMocks.Products();
     private readonly ICatalogUnitOfWork _unitOfWork = Substitute.For<ICatalogUnitOfWork>();
@@ -32,7 +36,7 @@ public class CatalogImportServiceTests
         _unitOfWork.SellerLinks.Returns(sellerLinks);
         _factory.Begin().Returns(_unitOfWork);
 
-        _service = new CatalogImportService(_factory, Options.Create(new MatchingOptions()));
+        _service = new CatalogImportService(_factory, _configuration);
     }
 
     private static Stream Json(string json) => new MemoryStream(Encoding.UTF8.GetBytes(json));

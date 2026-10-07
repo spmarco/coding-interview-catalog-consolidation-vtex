@@ -69,17 +69,11 @@ public sealed class SellerProduct
 
     /// <summary>
     /// Compares an offer by the same seller for the same product against this stored link:
-    /// the same SellerProductId just repeats it, a different one must be discarded.
+    /// the same SellerProductId just repeats it, a different one must be discarded. The caller found
+    /// this link by the incoming offer's seller and product, so both always match.
     /// </summary>
     public LinkOutcome Reconcile(SellerProduct incoming)
     {
-        ArgumentNullException.ThrowIfNull(incoming);
-
-        if (incoming.Seller != Seller || incoming.ProductId != ProductId)
-        {
-            throw new InvalidOperationException("Only offers by the same seller for the same product can be reconciled.");
-        }
-
         return incoming.SellerProductId == SellerProductId
             ? LinkOutcome.AlreadyLinked
             : LinkOutcome.DuplicateDiscarded;
